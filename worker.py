@@ -1,7 +1,7 @@
 import argparse
 import sys
 import time
-from rq import Worker, Connection
+from rq import Worker
 from redis import Redis
 
 from config import REDIS_URL
@@ -104,7 +104,6 @@ if __name__ == '__main__':
         sys.exit(1)
         
     redis_conn = Redis.from_url(REDIS_URL)
-    with Connection(redis_conn):
-        print("Worker successfully connected to Redis. Starting to consume tasks...")
-        worker = Worker(['default'])
-        worker.work()
+    print("Worker successfully connected to Redis. Starting to consume tasks...")
+    worker = Worker(['default'], connection=redis_conn)
+    worker.work()
