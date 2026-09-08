@@ -264,3 +264,42 @@ Naukri specific
 ├── vacancy_count
 └── work_from_home_type
 ```
+
+## Render Deployment (Distributed Workers)
+
+This project has been architected to run on [Render](https://render.com) using a distributed worker architecture powered by a free Redis instance and Azure PostgreSQL. 
+
+The architecture consists of:
+1. **Worker Service**: Consumes tasks from the Redis queue. You can scale this horizontally on Render to process multiple clients concurrently.
+2. **Cron Job (Daily Scheduler)**: Runs once a day to fetch the active clients list from the ApplyWizz API and queue exactly one task per `applywizz_id`. It does not perform any scraping itself.
+3. **Render Key Value (Redis)**: Used strictly as a lightweight RQ queue to pass the `applywizz_id` to the workers. Large scraped data is NOT stored here, ensuring full compatibility with Render's Free Key Value tier.
+
+### Deployment Steps
+1. Connect this repository to your Render account.
+2. In your Render Dashboard, create a new **Key Value** service (this is Render's free Redis replacement).
+3. Create the two background services (you can use the included `render.yaml` Blueprint or manually set them up):
+   - **Background Worker**:
+     - Environment: Python
+     - Build Command: `pip install -r requirements.txt`
+     - Start Command: `rq worker`
+   - **Cron Job**:
+     - Environment: Python
+     - Schedule: `0 0 * * *` (Daily at Midnight UTC, or adjust as needed)
+     - Build Command: `pip install -r requirements.txt`
+     - Start Command: `python scheduler.py`
+
+### ⚠️ IMPORTANT: Environment Variables
+You **MUST** configure the following Environment Variables directly in the Render Dashboard for both the Worker and the Cron Job. Do **not** hardcode or commit them to the codebase:
+
+* `DATABASE_URL`: Your exact Azure PostgreSQL Connection String.
+* `REDIS_URL`: The Internal or External connection string from your Render Key Value instance.
+* `ACTIVE_CLIENTS_URL`: (Optional) Defaults to the active clients API.
+* `CLIENT_DETAILS_URL`: (Optional) Defaults to the client details API.
+* `JOB_ROLES_URL`: (Optional) Defaults to the job roles API.
+
+### Local Testing
+To test the worker locally without Redis, create a `.env` file (see `.env.example`) with your `DATABASE_URL`, and run:
+```bash
+python worker.py --test-mode
+```
+This will fetch the first 5 active clients and process them synchronously, saving the results to your Azure PostgreSQL database.

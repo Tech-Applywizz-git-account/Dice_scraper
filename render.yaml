@@ -1,0 +1,38 @@
+services:
+  # The Worker Service runs constantly in the background and processes tasks from Redis
+  - type: worker
+    name: dice-scraper-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: rq worker
+    envVars:
+      # Use an internal Redis URL if provisioned on Render, or external
+      - key: REDIS_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ACTIVE_CLIENTS_URL
+        value: https://applywizz-ca-management.vercel.app/api/active-clients
+      - key: CLIENT_DETAILS_URL
+        value: https://www.apply-wizz.me/api/get-client-details
+      - key: JOB_ROLES_URL
+        value: https://dashboard.apply-wizz.com/job-roles/
+
+  # The Cron Job runs once a day to fetch active clients and queue them
+  - type: cron
+    name: dice-scraper-daily
+    env: python
+    schedule: "0 0 * * *" # Runs every day at midnight UTC. Adjust as needed.
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scheduler.py
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ACTIVE_CLIENTS_URL
+        value: https://applywizz-ca-management.vercel.app/api/active-clients
+      - key: CLIENT_DETAILS_URL
+        value: https://www.apply-wizz.me/api/get-client-details
+      - key: JOB_ROLES_URL
+        value: https://dashboard.apply-wizz.com/job-roles/

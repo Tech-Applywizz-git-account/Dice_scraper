@@ -6,6 +6,7 @@ free-proxy>=1.1.1
 markdownify>=1.1.0
 numpy>=1.26.3
 pandas>=2.1.0
+openpyxl>=3.1.0
 pydantic>=2.3.0
 pydantic-settings>=2.0.0
 regex>=2024.4.28
@@ -22,3 +23,8 @@ typing-extensions>=4.5.0
 # Supabase integration
 supabase>=2.0.0
 python-dotenv>=1.0.0
+
+# Added for Render Worker architecture
+redis>=5.0.1
+rq>=1.15.0
+psycopg2-binary>=2.9.9

@@ -7,9 +7,6 @@ import traceback
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
-from supabase import create_client
-
 from bs4 import BeautifulSoup
 
 from jobspy_enhanced.model import (
@@ -352,7 +349,9 @@ class Dice(Scraper):
         try:
             from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
         except ImportError:
-            log.warning("Playwright not installed – skipping headless enrichment.")
+            if not getattr(self, "_playwright_missing_logged", False):
+                log.warning("Playwright not installed – skipping headless enrichment.")
+                self._playwright_missing_logged = True
             return
 
         log.info(f"[Headless] Fetching rendered page: {job_url}")
@@ -527,6 +526,92 @@ class Dice(Scraper):
     def _format_job_type_for_csv(self, job: JobPost) -> str:
         return getattr(job, 'w2_c2c_type', '') or ''
 
+    def _job_to_row(self, job: JobPost, search_term: str = "") -> dict:
+        return {
+            "Search Term": search_term,
+            "Job ID": job.id,
+            "Title": job.title,
+            "Company": job.company_name,
+            "Location City": job.location.city if job.location else "",
+            "Location State": job.location.state if job.location else "",
+            "Location Country": str(job.location.country) if job.location and job.location.country else "",
+            "Is Remote": "Yes" if job.is_remote else "No",
+            "Job Type": self._format_job_type_for_csv(job),
+            "Employment Type": getattr(job, "employment_type", "") or "",
+            "Date Posted": str(job.date_posted) if job.date_posted else "",
+            "Job URL (Dice)": job.job_url or "",
+            "External Apply URL": job.job_url_direct or "",
+            "Salary": self._format_salary_for_csv(job.compensation),
+            "Experience": getattr(job, "experience", "") or "",
+            "Skills": ", ".join(job.skills) if hasattr(job, "skills") and job.skills else "",
+            "Description (Full)": job.description or "",
+        }
+
+    _ILLEGAL_XML_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+    def _excel_safe_text(self, value) -> str:
+        text = "" if value is None else str(value)
+        text = self._ILLEGAL_XML_RE.sub("", text)
+        return text[:32767]
+
+    def _excel_safe_rows(self, rows: list[dict]) -> list[dict]:
+        return [{key: self._excel_safe_text(value) for key, value in row.items()} for row in rows]
+
+    def _rows_from_jobs(self, jobs_with_terms: list[tuple[str, JobPost]]) -> tuple[list[str], list[dict], list[dict], list[dict]]:
+        columns = [
+            "Search Term", "Job ID", "Title", "Company", "Location City", "Location State",
+            "Location Country", "Is Remote", "Job Type", "Employment Type", "Date Posted",
+            "Job URL (Dice)", "External Apply URL", "Salary", "Experience", "Skills", "Description (Full)",
+        ]
+        all_rows = [self._job_to_row(job, term) for term, job in jobs_with_terms]
+        w2_rows = [
+            self._job_to_row(job, term)
+            for term, job in jobs_with_terms
+            if getattr(job, "w2_c2c_type", "") == "W2"
+        ]
+        c2c_rows = [
+            self._job_to_row(job, term)
+            for term, job in jobs_with_terms
+            if getattr(job, "w2_c2c_type", "") == "C2C"
+        ]
+        return columns, all_rows, w2_rows, c2c_rows
+
+    def save_to_csv_file(self, jobs_with_terms: list[tuple[str, JobPost]], csv_filename: str) -> str:
+        import pandas as pd
+
+        columns, all_rows, _, _ = self._rows_from_jobs(jobs_with_terms)
+        os.makedirs(os.path.dirname(csv_filename) or ".", exist_ok=True)
+        pd.DataFrame(self._excel_safe_rows(all_rows), columns=columns).to_csv(
+            csv_filename, index=False, encoding="utf-8-sig"
+        )
+        log.info(f"Saved {len(all_rows)} jobs to {csv_filename}")
+        return csv_filename
+
+    def save_to_excel(
+        self,
+        jobs_with_terms: list[tuple[str, JobPost]],
+        filename: str,
+        csv_filename: str | None = None,
+    ) -> str:
+        import pandas as pd
+
+        columns, all_rows, w2_rows, c2c_rows = self._rows_from_jobs(jobs_with_terms)
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+
+        if csv_filename:
+            self.save_to_csv_file(jobs_with_terms, csv_filename)
+
+        safe_all = self._excel_safe_rows(all_rows)
+        safe_w2 = self._excel_safe_rows(w2_rows)
+        safe_c2c = self._excel_safe_rows(c2c_rows)
+        with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+            pd.DataFrame(safe_all, columns=columns).to_excel(writer, sheet_name="All Jobs", index=False)
+            pd.DataFrame(safe_w2, columns=columns).to_excel(writer, sheet_name="W2", index=False)
+            pd.DataFrame(safe_c2c, columns=columns).to_excel(writer, sheet_name="C2C", index=False)
+
+        log.info(f"Saved {len(all_rows)} jobs to {filename}")
+        return filename
+
     def save_to_csv(self, jobs: list[JobPost], filename: str = "dice_jobs.csv") -> str:
         import csv
         if not jobs: log.warning("No jobs to save to CSV"); return filename
@@ -577,23 +662,17 @@ class Dice(Scraper):
         print(f"Total Jobs Found: {stats['total_jobs']}\nJobs with External Apply URL: {stats['jobs_with_external_apply']} ({stats['jobs_with_external_apply_percent']:.1f}%)\nRemote Jobs: {stats['remote_jobs']} ({stats['remote_jobs_percent']:.1f}%)\nJobs with Skills Listed: {stats['jobs_with_skills']} ({stats['jobs_with_skills_percent']:.1f}%)\nJobs with Salary Info: {stats['jobs_with_salary']} ({stats['jobs_with_salary_percent']:.1f}%)\nJobs with Experience Info: {stats['jobs_with_experience']} ({stats['jobs_with_experience_percent']:.1f}%)\nJobs with Employment Type: {stats['jobs_with_employment_type']} ({stats['jobs_with_employment_type_percent']:.1f}%)")
 
 def run_dice_scraper():
-    """Main runner function integrated from run_dice.py."""
-    load_dotenv()
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-
-    if not supabase_url or not supabase_key or "your-" in supabase_url:
-        print("⚠ ERROR: Set SUPABASE_URL and SUPABASE_KEY in your .env file")
-        return
-
-    supabase = create_client(supabase_url, supabase_key)
-    print(f"✓ Connected to Supabase: {supabase_url}")
+    """Main runner: scrape Dice and write results to CSV and Excel."""
     print(f"\nInitializing Dice scraper for {len(SEARCH_TERMS)} search domains...")
-    
+    print("Results will be saved to CSV and Excel (no database insert).")
+
     scraper = Dice()
-    total_inserted = 0
-    total_scraped = 0
+    collected: list[tuple[str, JobPost]] = []
     seen_job_ids = set()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs("output", exist_ok=True)
+    excel_path = os.path.join("output", f"dice_jobs_{timestamp}.xlsx")
+    csv_path = os.path.join("output", f"dice_jobs_{timestamp}.csv")
 
     for idx, term in enumerate(SEARCH_TERMS, 1):
         print(f"\n{'='*80}")
@@ -616,23 +695,30 @@ def run_dice_scraper():
                 if job.id not in seen_job_ids:
                     seen_job_ids.add(job.id)
                     new_jobs.append(job)
-
-            total_scraped += len(new_jobs)
+                    collected.append((term, job))
 
             if new_jobs:
-                inserted = util.insert_to_supabase(supabase, new_jobs, term)
-                total_inserted += inserted
-                print(f"  → {len(job_response.jobs)} found, {len(new_jobs)} new, {inserted} inserted to Supabase")
+                print(f"  → {len(job_response.jobs)} found, {len(new_jobs)} new")
             else:
                 print(f"  → {len(job_response.jobs)} found, 0 new (all duplicates)")
+
+            scraper.save_to_csv_file(collected, csv_path)
+            print(f"  → CSV updated: {os.path.abspath(csv_path)} ({len(collected)} jobs)")
 
         except Exception as e:
             print(f"  → Error scraping '{term}': {e}")
             traceback.print_exc()
             continue
 
+    try:
+        scraper.save_to_excel(collected, excel_path)
+        print(f"Excel file: {os.path.abspath(excel_path)}")
+    except Exception as e:
+        print(f"Excel save failed ({e}). CSV is still available.")
+        traceback.print_exc()
+
     print(f"\n\n{'='*80}")
     print(f"SCRAPING COMPLETE")
     print(f"{'='*80}")
-    print(f"Total unique jobs scraped: {total_scraped}")
-    print(f"Total inserted to Supabase: {total_inserted}")
+    print(f"Total unique jobs scraped: {len(collected)}")
+    print(f"CSV file: {os.path.abspath(csv_path)}")
