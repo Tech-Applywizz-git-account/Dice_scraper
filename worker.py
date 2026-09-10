@@ -67,7 +67,7 @@ def process_client(applywizz_id):
                 'title': job.title,
                 'company': job.company_name,
                 'applywizz_id': applywizz_id,
-                'company_email': getattr(job, 'emails', None) # JobPost uses emails
+                'company_email': requirements.get('company_email', None)
             })
             
         inserted, skipped = upsert_jobs(db_jobs)

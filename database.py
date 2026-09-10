@@ -15,19 +15,19 @@ def init_db():
             cur.execute("""
                 SELECT constraint_name 
                 FROM information_schema.table_constraints 
-                WHERE table_name = 'jobs' 
+                WHERE table_name = 'dice_scraped_jobs' 
                 AND constraint_type = 'UNIQUE' 
-                AND constraint_name = 'jobs_url_applywizz_unique';
+                AND constraint_name = 'dice_scraped_jobs_url_applywizz_unique';
             """)
             if not cur.fetchone():
-                print("Adding unique constraint jobs_url_applywizz_unique to jobs table...")
+                print("Adding unique constraint dice_scraped_jobs_url_applywizz_unique to dice_scraped_jobs table...")
                 cur.execute("""
-                    ALTER TABLE public.jobs 
-                    ADD CONSTRAINT jobs_url_applywizz_unique UNIQUE (url, applywizz_id);
+                    ALTER TABLE public.dice_scraped_jobs 
+                    ADD CONSTRAINT dice_scraped_jobs_url_applywizz_unique UNIQUE (url, applywizz_id);
                 """)
                 conn.commit()
             else:
-                print("Unique constraint jobs_url_applywizz_unique already exists.")
+                print("Unique constraint dice_scraped_jobs_url_applywizz_unique already exists.")
     finally:
         conn.close()
 
@@ -47,7 +47,7 @@ def upsert_jobs(jobs_data):
     try:
         with conn.cursor() as cur:
             query = """
-                INSERT INTO public.jobs (url, title, company, applywizz_id, company_email)
+                INSERT INTO public.dice_scraped_jobs (url, title, company, applywizz_id, company_email)
                 VALUES %s
                 ON CONFLICT (url, applywizz_id) DO NOTHING
                 RETURNING id;

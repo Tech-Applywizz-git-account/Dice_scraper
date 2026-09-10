@@ -92,6 +92,8 @@ class Dice(Scraper):
                 params["filters.postedDate"] = "THIRTY"
         if self.scraper_input.is_remote:
             params["filters.isRemote"] = "true"
+        if getattr(self.scraper_input, "easy_apply", False):
+            params["filters.easyApply"] = "true"
         if self.scraper_input.location:
             params["location"] = self.scraper_input.location
 

@@ -74,6 +74,7 @@ def extract_client_requirements(client_details):
         "applywizz_id": applywizz_id,
         "name": client_info.get("full_name", ""),
         "email": client_info.get("personal_email", ""),
+        "company_email": client_info.get("company_email", ""),
         "role": role,
         "alternate_roles": alternate_roles,
         "experience": experience,

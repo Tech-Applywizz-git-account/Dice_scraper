@@ -29,7 +29,8 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
         location=location if location and str(location).strip() else "United States",
         country=country_enum,
         results_wanted=30, # Get a batch of jobs to filter
-        hours_old=72 # Limit to recent jobs for relevance
+        hours_old=24, # Limit to recent jobs for relevance
+        easy_apply=True
     )
 
     scraper = jobspy_enhanced.dice.Dice()
