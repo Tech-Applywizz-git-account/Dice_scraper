@@ -182,27 +182,99 @@ def extract_salary_from_description(description: str) -> Optional[Compensation]:
 def extract_experience_from_description(description: str) -> Optional[str]:
     if not description:
         return None
-    word_to_num = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15, 'twenty': 20, 'thirty': 30}
-    p = re.search(r'(\d+)\s*\+\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp\b|professional|work|relevant|related)', description, re.IGNORECASE)
-    if p: return f"{p.group(1)}+ years"
-    p = re.search(r'(\d+)\s*(?:-|to)\s*(\d+)\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp\b|professional|work|relevant|related)', description, re.IGNORECASE)
-    if p: return f"{p.group(1)}-{p.group(2)} years"
-    p = re.search(r'(?:minimum|minimum\s+of|at\s+least|atleast|require[sd]?)\s+(\d+)\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp\b|professional|work|relevant|related)', description, re.IGNORECASE)
-    if p: return f"{p.group(1)}+ years"
-    p = re.search(r'(\d+)\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp\b|professional\s+experience|work\s+experience|relevant\s+experience|related\s+experience)', description, re.IGNORECASE)
-    if p: return f"{p.group(1)} years"
-    p = re.search(r'(?:requirements?|qualifications?|skills?)[:\s]+.*?(\d+)\s*\+\s*(?:years?|yrs?)', description, re.IGNORECASE | re.DOTALL)
-    if p: return f"{p.group(1)}+ years"
-    p = re.search(r'\b(' + '|'.join(word_to_num.keys()) + r')\s+to\s+(' + '|'.join(word_to_num.keys()) + r')\s*(?:years?|yrs?)', description, re.IGNORECASE)
+        
+    cleaned = description.replace('\xa0', ' ').replace('&nbsp;', ' ')
+    
+    word_to_num = {
+        'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+        'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+        'fifteen': 15, 'twenty': 20, 'thirty': 30
+    }
+    
+    dash_pattern = r'[-–—]|to'
+    exp_suffix = r'(?:\s+of)?(?:\s+[\w\s/,\.\(\)]+?)?\s*(?:experience|exp\b|professional|work|relevant|related|development|engineering|coding|hands-on|industry)'
+
+    # 1. Prefix-based patterns (e.g. 'Experience Range: 4 - 6 Years', 'Experience: 5+ years', 'Years of Experience: 3-5')
+    p = re.search(
+        r'(?:(?:years?\s+of\s+)?experience|exp)(?:\s+(?:range|level|required|requirement|needed))?[:\s]+(\d+)\s*(?:' + dash_pattern + r')\s*(\d+)\s*(?:years?|yrs?)?',
+        cleaned,
+        re.IGNORECASE
+    )
     if p:
-        mn, mx = p.group(1).lower(), p.group(2).lower()
-        if mn in word_to_num and mx in word_to_num:
-            return f"{word_to_num[mn]}-{word_to_num[mx]} years"
-    p = re.search(r'\b(' + '|'.join(word_to_num.keys()) + r')\s*\+?\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp\b)', description, re.IGNORECASE)
+        return f"{p.group(1)}-{p.group(2)} years"
+        
+    p = re.search(
+        r'(?:(?:years?\s+of\s+)?experience|exp)(?:\s+(?:range|level|required|requirement|needed))?[:\s]+(\d+)\s*(\+)?\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
     if p:
-        word = p.group(1).lower()
-        if word in word_to_num:
-            return f"{word_to_num[word]}+ years" if '+' in p.group(0) else f"{word_to_num[word]} years"
+        return f"{p.group(1)}+ years" if p.group(2) else f"{p.group(1)} years"
+
+    # 2. Minimum / at least / required (e.g. 'Minimum 4 years hands-on coding', 'At least 5 years of software engineering')
+    p = re.search(
+        r'(?:minimum|minimum\s+of|at\s+least|atleast|require[sd]?)\s+(?:of\s+)?(\d+)\s*(?:' + dash_pattern + r')\s*(\d+)\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{p.group(1)}-{p.group(2)} years"
+
+    p = re.search(
+        r'(?:minimum|minimum\s+of|at\s+least|atleast|require[sd]?)\s+(?:of\s+)?(\d+)\s*(?:\+)?\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{p.group(1)}+ years"
+
+    # 3. Numeric ranges (e.g. '3-5 years software engineering experience', '2 - 4 years experience required')
+    p = re.search(
+        r'(\d+)\s*(?:' + dash_pattern + r')\s*(\d+)\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{p.group(1)}-{p.group(2)} years"
+
+    # 4. Plus suffix (e.g. '5+ years of software engineering', '5+ years of Python development', '5+ years with AWS')
+    p = re.search(
+        r'(\d+)\s*\+\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{p.group(1)}+ years"
+
+    # 5. Simple years with experience / domain keywords
+    p = re.search(
+        r'(\d+)\s*(?:years?|yrs?)' + exp_suffix,
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{p.group(1)} years"
+
+    # 6. Word numbers (e.g. 'five to seven years of relevant experience', 'three+ years of web development')
+    w_keys = '|'.join(word_to_num.keys())
+    p = re.search(
+        r'\b(' + w_keys + r')\s*(?:' + dash_pattern + r')\s*(' + w_keys + r')\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        return f"{word_to_num[p.group(1).lower()]}-{word_to_num[p.group(2).lower()]} years"
+
+    p = re.search(
+        r'\b(' + w_keys + r')\s*(?:\+|plus)?\s*(?:years?|yrs?)',
+        cleaned,
+        re.IGNORECASE
+    )
+    if p:
+        val = word_to_num[p.group(1).lower()]
+        return f"{val}+ years" if ('+' in p.group(0) or 'plus' in p.group(0).lower()) else f"{val} years"
+
     return None
 
 def is_valid_skill(text: str) -> bool:

@@ -22,7 +22,7 @@ services:
   - type: cron
     name: dice-scraper-daily
     env: python
-    schedule: "0 0 * * *" # Runs every day at midnight UTC. Adjust as needed.
+    schedule: "0 21 * * *" # Runs every day at 9:00 PM UTC = 2:30 AM IST (UTC+5:30)
     buildCommand: pip install -r requirements.txt
     startCommand: python scheduler.py
     envVars:

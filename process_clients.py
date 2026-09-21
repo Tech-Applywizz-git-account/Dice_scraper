@@ -23,13 +23,21 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
     except ValueError:
         country_enum = Country.USA
 
+    try:
+        from config import HOURS_OLD, MAX_JOBS_PER_SEARCH
+        hours = HOURS_OLD
+        results_wanted = MAX_JOBS_PER_SEARCH
+    except Exception:
+        hours = 72
+        results_wanted = 30
+
     scraper_input = ScraperInput(
         site_type=[Site.DICE],
         search_term=search_term,
         location=location if location and str(location).strip() else "United States",
         country=country_enum,
-        results_wanted=30, # Get a batch of jobs to filter
-        hours_old=24, # Limit to recent jobs for relevance
+        results_wanted=results_wanted,
+        hours_old=hours,
         easy_apply=True
     )
 
@@ -37,6 +45,13 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
     try:
         job_response = scraper.scrape(scraper_input)
         jobs = job_response.jobs
+        
+        # If no jobs found with easy_apply=True in a specific location, fallback to all apply types
+        if not jobs and location and location.lower() != "united states":
+            scraper_input.easy_apply = False
+            job_response = scraper.scrape(scraper_input)
+            jobs = job_response.jobs
+            
         DICE_CACHE[cache_key] = jobs
         return jobs
     except Exception as e:
@@ -46,8 +61,8 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
 def extract_years(exp_str: Any) -> float:
     if not exp_str:
         return 0.0
-    # Try to find a number in the string
-    match = re.search(r'(\d+)', str(exp_str))
+    # Try to find a number in the string (including decimals)
+    match = re.search(r'(\d+(?:\.\d+)?)', str(exp_str))
     if match:
         return float(match.group(1))
     return 0.0
@@ -115,63 +130,35 @@ def process_clients(csv_path: str, test_mode: bool = False):
             if alt_roles and str(alt_roles).strip().lower() != 'na':
                 search_roles.extend([r.strip() for r in alt_roles.split(',') if r.strip()])
                 
-            client_exp = extract_years(experience)
+            from filtering import filter_jobs_for_client
+
+            client_exp_raw = str(experience or '').strip()
+            client_exp = extract_years(client_exp_raw)
             
             exclude_list = [c.strip().lower() for c in exclude_companies.split(',')] if exclude_companies and str(exclude_companies).strip().lower() != 'na' else []
             
-            client_jobs = {} # keyed by job_url for deduplication
+            locations = [location.strip()] if location and str(location).strip() and str(location).strip().lower() != 'na' else ["United States"]
             
+            requirements = {
+                "role": target_role,
+                "alternate_roles": alt_roles,
+                "experience": client_exp,
+                "experience_raw": client_exp_raw,
+                "locations": locations,
+                "work_preference": work_pref,
+                "sponsorship": sponsorship,
+                "exclude_companies": exclude_list
+            }
+            
+            all_scraped = []
             for role in search_roles:
                 if not role: continue
-                
                 print(f"  Searching Dice for role: '{role}' in '{location}'")
                 jobs = get_jobs_from_dice(role, location, country)
+                all_scraped.extend(jobs)
                 
-                for job in jobs:
-                    if job.job_url in client_jobs:
-                        continue
-                    
-                    # Apply filtering
-                    
-                    # 1. Company exclusion
-                    comp_name = (job.company_name or "").lower()
-                    if comp_name and any(exc in comp_name for exc in exclude_list if exc):
-                        continue
-                        
-                    # 2. Experience check
-                    job_exp_str = getattr(job, 'experience', '')
-                    if job_exp_str:
-                        job_exp = extract_years(job_exp_str)
-                        # If client has little experience and job demands much more
-                        if client_exp >= 0 and job_exp > client_exp + 2:
-                            continue
-                            
-                    # 3. Work preference check
-                    if work_pref == 'remote':
-                        if not job.is_remote:
-                            continue
-                    elif work_pref == 'hybrid':
-                        # Note: job_type, description, or title might mention hybrid
-                        is_hybrid = False
-                        desc_lower = (job.description or "").lower()
-                        if "hybrid" in desc_lower or "hybrid" in (job.title or "").lower():
-                            is_hybrid = True
-                        if not is_hybrid:
-                            continue
-                            
-                    # 4. Sponsorship check
-                    # Strict filtering for sponsorship is hard without deep NLP. 
-                    # If sponsorship is required, we can look for "no c2c", "no sponsorship" in desc
-                    desc_lower = (job.description or "").lower()
-                    if sponsorship == 'yes':
-                        if "no sponsorship" in desc_lower or "no h1b" in desc_lower or "no corp to corp" in desc_lower or "no c2c" in desc_lower:
-                            continue
-                    
-                    # 5. Client Preferences
-                    if not matches_preferences(job, client_prefs):
-                        continue
-                    
-                    client_jobs[job.job_url] = job
+            filtered = filter_jobs_for_client(all_scraped, requirements)
+            client_jobs = {job.job_url: job for job in filtered}
             
             print(f"  Found {len(client_jobs)} matching jobs for {name}")
             for url, job in client_jobs.items():

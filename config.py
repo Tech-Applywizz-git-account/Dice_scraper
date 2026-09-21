@@ -1,8 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file (for local development)
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Essential URLs
 ACTIVE_CLIENTS_URL = os.getenv("ACTIVE_CLIENTS_URL", "https://applywizz-ca-management.vercel.app/api/active-clients")
@@ -18,6 +19,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Configuration for workers
 MAX_JOBS_PER_SEARCH = int(os.getenv("MAX_JOBS_PER_SEARCH", "30"))
 HOURS_OLD = int(os.getenv("HOURS_OLD", "72"))
+
+# Optional test client IDs for local test mode (e.g. "AWL-39223,AWL-32830")
+TEST_CLIENT_IDS = os.getenv("TEST_CLIENT_IDS", "")
 
 def validate_config():
     if not DATABASE_URL:
