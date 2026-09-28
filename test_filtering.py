@@ -8,7 +8,8 @@ from filtering import (
     filter_jobs_for_client,
     extract_job_experience,
     is_internship_or_trainee_role,
-    is_seniority_compatible
+    is_seniority_compatible,
+    matches_employment_type
 )
 
 class TestDiceScraperFiltering(unittest.TestCase):
@@ -138,7 +139,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Senior Network Engineer",
             company_name="GoodCorp",
             job_url="https://dice.com/job/101",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j1, 'experience', '5+ years')
         
@@ -147,7 +149,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Cisco Network Engineer",
             company_name="NetworkPro",
             job_url="https://dice.com/job/102",
-            location=Location(city="New Haven", state="CT", country="USA")
+            location=Location(city="New Haven", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j2, 'experience', '4 years')
         
@@ -156,7 +159,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Software Engineer",
             company_name="TechCorp",
             job_url="https://dice.com/job/103",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j3, 'experience', '5 years')
         
@@ -165,7 +169,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Principal Network Engineer",
             company_name="EnterpriseCorp",
             job_url="https://dice.com/job/104",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j4, 'experience', '7+ years')
         
@@ -174,7 +179,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Lead Network Engineer",
             company_name="EnterpriseCorp",
             job_url="https://dice.com/job/105",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j5, 'experience', '6+ years')
         
@@ -183,7 +189,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Network Engineer",
             company_name="SouthernTech",
             job_url="https://dice.com/job/106",
-            location=Location(city="Atlanta", state="GA", country="USA")
+            location=Location(city="Atlanta", state="GA", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j6, 'experience', '5 years')
         
@@ -192,7 +199,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Network Engineer",
             company_name="BlacklistedCorp",
             job_url="https://dice.com/job/107",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j7, 'experience', '5 years')
         
@@ -224,7 +232,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Network Engineer",
             company_name="NetCorp",
             job_url="https://dice.com/job/201",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j_6yr, 'experience', '6 years')
         
@@ -232,7 +241,8 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Network Engineer",
             company_name="NetCorp",
             job_url="https://dice.com/job/202",
-            location=Location(city="Hartford", state="CT", country="USA")
+            location=Location(city="Hartford", state="CT", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(j_7yr, 'experience', '7 years')
         
@@ -345,28 +355,32 @@ class TestDiceScraperFiltering(unittest.TestCase):
             title="Artificial Intelligence/Machine Learning Engineer 2 - Intern",
             company_name="TechCo",
             job_url="https://dice.com/job/intern1",
-            location=Location(city="Austin", state="TX", country="USA")
+            location=Location(city="Austin", state="TX", country="USA"),
+            employment_type="Internship"
         )
         
         senior_job = JobPost(
             title="Senior GEN AI Engineer",
             company_name="TechCo",
             job_url="https://dice.com/job/senior1",
-            location=Location(city="Plano", state="TX", country="USA")
+            location=Location(city="Plano", state="TX", country="USA"),
+            employment_type="Full Time"
         )
         
         lead_job = JobPost(
             title="Lead Full Stack AI/ML Engineer",
             company_name="TechCo",
             job_url="https://dice.com/job/lead1",
-            location=Location(city="Dallas", state="TX", country="USA")
+            location=Location(city="Dallas", state="TX", country="USA"),
+            employment_type="Full Time"
         )
         
         mid_job = JobPost(
             title="Gen AI Engineer",
             company_name="TechCo",
             job_url="https://dice.com/job/mid1",
-            location=Location(city="Irving", state="TX", country="USA")
+            location=Location(city="Irving", state="TX", country="USA"),
+            employment_type="Full Time"
         )
         object.__setattr__(mid_job, 'experience', '3+ years')
         
@@ -512,6 +526,425 @@ class TestDiceScraperFiltering(unittest.TestCase):
         self.assertEqual(r4["locations"], ["United States"])
         self.assertEqual(r4["client_preferred_locations"], "United States")
 
+    def test_employment_type_rules(self):
+        """
+        Tests the 9 required business rules for Dice employment types:
+        1. Full Time job is accepted.
+        2. Contract W2 job is rejected.
+        3. Contract Independent job is rejected.
+        4. Contract Corp To Corp job is rejected.
+        5. A Full Time job whose unrelated page/description text mentions 'contract' is accepted.
+        6. Internship with client experience 0 is accepted.
+        7. Internship with client experience greater than 0 is rejected.
+        8. Missing or ambiguous employment type follows conservative behavior (rejected).
+        """
+        # 1. Full Time job is accepted
+        job_ft = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/1",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Full Time"
+        )
+        ok, reason = matches_employment_type(job_ft, client_exp=5.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "full_time")
+        
+        # 2. Contract W2 job is accepted
+        job_w2 = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/2",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Contract W2"
+        )
+        ok, reason = matches_employment_type(job_w2, client_exp=5.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "w2_contract")
+        
+        # 3. Contract Independent job is rejected
+        job_ind = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/3",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Contract Independent"
+        )
+        ok, reason = matches_employment_type(job_ind, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "contract")
+        
+        # 4. Contract Corp To Corp job is rejected
+        job_c2c = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/4",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Contract Corp To Corp"
+        )
+        ok, reason = matches_employment_type(job_c2c, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "contract")
+        
+        # Additional contract variants: 1099, C2C, Independent Contractor, Contract
+        for c_type in ["1099", "C2C", "Corp To Corp", "Independent Contractor", "Contract", "Contract to Hire"]:
+            job_c = JobPost(
+                title="Data Analyst",
+                company_name="Co",
+                job_url="http://dice.com/c",
+                location=Location(city="Atlanta", state="GA"),
+                employment_type=c_type
+            )
+            ok, reason = matches_employment_type(job_c, client_exp=5.0)
+            self.assertFalse(ok, f"Expected {c_type} to be rejected")
+            self.assertEqual(reason, "contract")
+            
+        # 5. Full Time job with unrelated description/page text mentioning 'contract' is accepted
+        desc_with_contract = "Great full time position. You will manage software vendor contracts and agreements with external contractors."
+        job_ft_contract_desc = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/5",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Full Time",
+            description=desc_with_contract
+        )
+        ok, reason = matches_employment_type(job_ft_contract_desc, client_exp=5.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "full_time")
+        
+        # 6. Internship with client experience 0 is accepted
+        job_intern = JobPost(
+            title="Data Analyst Intern",
+            company_name="Co",
+            job_url="http://dice.com/6",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Internship"
+        )
+        ok, reason = matches_employment_type(job_intern, client_exp=0.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "internship_allowed_for_0_exp")
+        
+        # 7. Internship with client experience > 0 is rejected
+        ok, reason = matches_employment_type(job_intern, client_exp=1.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "internship_rejected_for_experienced_client")
+        
+        ok, reason = matches_employment_type(job_intern, client_exp=4.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "internship_rejected_for_experienced_client")
+
+        # 8. Missing or ambiguous employment type follows conservative behavior (rejected)
+        job_missing1 = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/7",
+            location=Location(city="Atlanta", state="GA")
+        )
+        ok, reason = matches_employment_type(job_missing1, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "missing_employment_type")
+        
+        job_missing2 = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/8",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type=""
+        )
+        ok, reason = matches_employment_type(job_missing2, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "missing_employment_type")
+        
+        job_missing3 = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/9",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Not Specified"
+        )
+        ok, reason = matches_employment_type(job_missing3, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "missing_employment_type")
+        
+        job_ambiguous = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/10",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Part Time"
+        )
+        ok, reason = matches_employment_type(job_ambiguous, client_exp=5.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "ambiguous_employment_type")
+
+        # Multi-badge: Contract W2 + Full Time -> Full Time accepted by priority 1
+        job_multi = JobPost(
+            title="Data Analyst",
+            company_name="Co",
+            job_url="http://dice.com/11",
+            location=Location(city="Atlanta", state="GA"),
+            employment_type="Full Time, Contract W2"
+        )
+        ok, reason = matches_employment_type(job_multi, client_exp=5.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "full_time")
+
+    def test_filter_jobs_for_client_employment_type_integration(self):
+        """Tests filter_jobs_for_client end-to-end with employment-type rules."""
+        requirements_exp5 = {
+            "applywizz_id": "AWL-EXP5",
+            "role": "Data Analyst",
+            "experience": 5.0,
+            "locations": ["Georgia"],
+            "work_preference": "all"
+        }
+        requirements_exp0 = {
+            "applywizz_id": "AWL-EXP0",
+            "role": "Data Analyst",
+            "experience": 0.0,
+            "locations": ["Georgia"],
+            "work_preference": "all"
+        }
+        
+        j_ft = JobPost(title="Data Analyst", company_name="Co", job_url="http://dice.com/ft", location=Location(city="Atlanta", state="GA"), employment_type="Full Time")
+        j_w2 = JobPost(title="Data Analyst", company_name="Co", job_url="http://dice.com/w2", location=Location(city="Atlanta", state="GA"), employment_type="Contract W2")
+        j_c2c = JobPost(title="Data Analyst", company_name="Co", job_url="http://dice.com/c2c", location=Location(city="Atlanta", state="GA"), employment_type="Contract Corp To Corp")
+        j_ind = JobPost(title="Data Analyst", company_name="Co", job_url="http://dice.com/ind", location=Location(city="Atlanta", state="GA"), employment_type="Contract Independent")
+        j_intern = JobPost(title="Data Analyst Intern", company_name="Co", job_url="http://dice.com/intern", location=Location(city="Atlanta", state="GA"), employment_type="Internship")
+        j_missing = JobPost(title="Data Analyst", company_name="Co", job_url="http://dice.com/missing", location=Location(city="Atlanta", state="GA"))
+        
+        all_test_jobs = [j_ft, j_w2, j_c2c, j_ind, j_intern, j_missing]
+        
+        # Experienced client (5 years): Full Time and Contract W2 pass
+        res_exp5 = filter_jobs_for_client(all_test_jobs, requirements_exp5)
+        res_urls5 = [j.job_url for j in res_exp5]
+        self.assertEqual(len(res_exp5), 2)
+        self.assertIn("http://dice.com/ft", res_urls5)
+        self.assertIn("http://dice.com/w2", res_urls5)
+        self.assertNotIn("http://dice.com/c2c", res_urls5)
+        self.assertNotIn("http://dice.com/ind", res_urls5)
+        self.assertNotIn("http://dice.com/intern", res_urls5)
+        self.assertNotIn("http://dice.com/missing", res_urls5)
+        
+        # Entry-level client (0 years): Full Time, Contract W2, and Internship pass
+        res_exp0 = filter_jobs_for_client(all_test_jobs, requirements_exp0)
+        res_urls0 = [j.job_url for j in res_exp0]
+        self.assertEqual(len(res_exp0), 3)
+        self.assertIn("http://dice.com/ft", res_urls0)
+        self.assertIn("http://dice.com/w2", res_urls0)
+        self.assertIn("http://dice.com/intern", res_urls0)
+        self.assertNotIn("http://dice.com/c2c", res_urls0)
+        self.assertNotIn("http://dice.com/ind", res_urls0)
+        self.assertNotIn("http://dice.com/missing", res_urls0)
+
+    def test_parser_extract_dice_employment_type(self):
+        """Tests util.extract_dice_employment_type on mock HTML and JSON-LD."""
+        from bs4 import BeautifulSoup
+        from jobspy_enhanced.dice.util import extract_dice_employment_type
+        
+        # 1. Header card with Full Time badge
+        html_ft = """
+        <div data-testid="job-detail-header-card">
+            <h1>Data Analyst</h1>
+            <span class="SeuiInfoBadge-root">Full Time</span>
+            <span class="SeuiInfoBadge-root">On-site</span>
+        </div>
+        """
+        soup_ft = BeautifulSoup(html_ft, 'html.parser')
+        self.assertEqual(extract_dice_employment_type(soup_ft), "Full Time")
+        
+        # 2. Header card with multiple contract badges
+        html_contract = """
+        <div data-testid="job-detail-header-card">
+            <h1>Data Analyst</h1>
+            <span class="SeuiInfoBadge-root">Contract W2</span>
+            <span class="SeuiInfoBadge-root">Contract Corp To Corp</span>
+            <span class="SeuiInfoBadge-root">Contract Independent</span>
+        </div>
+        """
+        soup_contract = BeautifulSoup(html_contract, 'html.parser')
+        extracted_contract = extract_dice_employment_type(soup_contract)
+        self.assertIn("Contract W2", extracted_contract)
+        self.assertIn("Contract Corp To Corp", extracted_contract)
+        self.assertIn("Contract Independent", extracted_contract)
+        
+        # 3. Fallback: JSON-LD FULL_TIME
+        html_jsonld_ft = """
+        <div>
+            <h1>Data Analyst</h1>
+            <script type="application/ld+json">
+            {
+                "@type": "JobPosting",
+                "title": "Data Analyst",
+                "employmentType": "FULL_TIME"
+            }
+            </script>
+        </div>
+        """
+        soup_jsonld_ft = BeautifulSoup(html_jsonld_ft, 'html.parser')
+        self.assertEqual(extract_dice_employment_type(soup_jsonld_ft), "Full Time")
+        
+        # 4. Fallback: JSON-LD CONTRACTOR
+        html_jsonld_contract = """
+        <div>
+            <h1>Data Analyst</h1>
+            <script type="application/ld+json">
+            {
+                "@type": "JobPosting",
+                "title": "Data Analyst",
+                "employmentType": "CONTRACTOR"
+            }
+            </script>
+        </div>
+        """
+        soup_jsonld_contract = BeautifulSoup(html_jsonld_contract, 'html.parser')
+        self.assertEqual(extract_dice_employment_type(soup_jsonld_contract), "Contract")
+
+    def test_get_active_clients_json_and_fallback(self):
+        """Tests that get_active_clients loads from JSON if present, else falls back to API."""
+        import tempfile
+        import json
+        from unittest.mock import patch
+        import api_client
+        
+        # 1. With JSON file present
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as tf:
+            json.dump(["AWL-TEST-1", "AWL-TEST-2"], tf)
+            tf_path = tf.name
+            
+        with patch.object(api_client, 'CLIENTS_FILE', tf_path):
+            clients = api_client.get_active_clients()
+            self.assertEqual(clients, ["AWL-TEST-1", "AWL-TEST-2"])
+            
+        # 2. When JSON file does not exist -> falls back to API
+        with patch.object(api_client, 'CLIENTS_FILE', '/path/does/not/exist.json'):
+            with patch('requests.get') as mock_get:
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"applywizz_ids": ["AWL-API-1", "AWL-API-2"]}
+                clients = api_client.get_active_clients()
+                self.assertEqual(clients, ["AWL-API-1", "AWL-API-2"])
+                mock_get.assert_called_once()
+
+    def test_non_us_country_location_filtering(self):
+        """Tests that non-US country location preferences are properly supported."""
+        from jobspy_enhanced.dice.util import parse_location
+        
+        # 1. Location parsing for non-US
+        loc_uk = parse_location("London, UK")
+        self.assertEqual(loc_uk.city, "London")
+        self.assertEqual(loc_uk.country, "UK")
+
+        loc_ca = parse_location("Toronto, ON")
+        self.assertEqual(loc_ca.city, "Toronto")
+        self.assertEqual(loc_ca.state, "ON")
+        self.assertEqual(loc_ca.country, "CA")
+
+        loc_ca_full = parse_location("Vancouver, BC, Canada")
+        self.assertEqual(loc_ca_full.city, "Vancouver")
+        self.assertEqual(loc_ca_full.country, "CA")
+
+        # 2. Location preference matching for UK client
+        job_london = JobPost(
+            id="job-uk-1",
+            title="Data Analyst",
+            company_name="Test Corp",
+            job_url="https://dice.com/job/uk-1",
+            location=Location(city="London", country="UK"),
+            employment_type="Full Time"
+        )
+        job_ny = JobPost(
+            id="job-us-1",
+            title="Data Analyst",
+            company_name="Test Corp",
+            job_url="https://dice.com/job/us-1",
+            location=Location(city="New York", state="NY", country="USA"),
+            employment_type="Full Time"
+        )
+        
+        # UK client with London / UK
+        self.assertTrue(matches_location_preference(job_london, ["Greater London", "United Kingdom"], "all", client_country="United Kingdom"))
+        # UK client should not match random US job in NY
+        self.assertFalse(matches_location_preference(job_ny, ["Greater London", "United Kingdom"], "all", client_country="United Kingdom"))
+
+        # Canada client with Toronto / Canada
+        job_toronto = JobPost(
+            id="job-ca-1",
+            title="Software Engineer",
+            company_name="Test Corp",
+            job_url="https://dice.com/job/ca-1",
+            location=Location(city="Toronto", state="ON", country="CA"),
+            employment_type="Full Time"
+        )
+        self.assertTrue(matches_location_preference(job_toronto, ["Toronto, ON", "Canada"], "all", client_country="Canada"))
+        self.assertFalse(matches_location_preference(job_ny, ["Toronto, ON", "Canada"], "all", client_country="Canada"))
+
+    def test_dice_scraper_country_code(self):
+        """Tests that Dice scraper derives the correct 2-letter ISO countryCode."""
+        from jobspy_enhanced.dice import Dice
+        from jobspy_enhanced.model import ScraperInput, Site, Country
+        
+        scraper = Dice()
+        
+        # USA -> US
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.USA)
+        self.assertEqual(scraper._get_country_code(), "US")
+        
+        # UK -> GB
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.UK)
+        self.assertEqual(scraper._get_country_code(), "GB")
+
+        # Canada -> CA
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.CANADA)
+        self.assertEqual(scraper._get_country_code(), "CA")
+
+        # Ireland -> IE
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.IRELAND)
+        self.assertEqual(scraper._get_country_code(), "IE")
+
+        # Germany -> DE
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.GERMANY)
+        self.assertEqual(scraper._get_country_code(), "DE")
+
+        # Australia -> AU
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.AUSTRALIA)
+        self.assertEqual(scraper._get_country_code(), "AU")
+
+        # India -> IN
+        scraper.scraper_input = ScraperInput(site_type=[Site.DICE], search_term="Dev", country=Country.INDIA)
+        self.assertEqual(scraper._get_country_code(), "IN")
+
+    def test_is_job_expired(self):
+        from bs4 import BeautifulSoup
+        from jobspy_enhanced.dice.util import is_job_expired
+
+        # Expired page with inline-message alert
+        expired_html = '''
+        <html>
+            <body>
+                <div data-testid="inline-message" role="alert" class="text-danger">
+                    Sorry this job is no longer available. The Similar Jobs shown below might interest you.
+                </div>
+                <h1>Software Engineer</h1>
+            </body>
+        </html>
+        '''
+        soup_expired = BeautifulSoup(expired_html, 'html.parser')
+        self.assertTrue(is_job_expired(soup_expired, expired_html))
+
+        # Active job page
+        active_html = '''
+        <html>
+            <body>
+                <h1>Senior Python Developer</h1>
+                <button data-testid="apply-button">Apply Now</button>
+            </body>
+        </html>
+        '''
+        soup_active = BeautifulSoup(active_html, 'html.parser')
+        self.assertFalse(is_job_expired(soup_active, active_html))
+
 if __name__ == '__main__':
     unittest.main()
+
 

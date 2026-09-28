@@ -70,11 +70,37 @@ class Dice(Scraper):
         log.info(f"Total jobs collected: {len(paginated_jobs)}")
         return JobResponse(jobs=paginated_jobs)
 
+    def _get_country_code(self) -> str:
+        if not self.scraper_input or not self.scraper_input.country:
+            return "US"
+        c = self.scraper_input.country
+        if isinstance(c, Country):
+            val = c.value
+            if len(val) > 1 and ":" in val[1]:
+                return val[1].split(":")[1].upper()
+            elif len(val) > 1 and val[1]:
+                return val[1].upper()
+        elif isinstance(c, str):
+            c_str = c.strip().upper()
+            if c_str in ["USA", "US", "UNITED STATES"]: return "US"
+            if c_str in ["UK", "UNITED KINGDOM", "GB", "GREAT BRITAIN"]: return "GB"
+            if c_str in ["CA", "CANADA"]: return "CA"
+            if c_str in ["IE", "IRELAND"]: return "IE"
+            if c_str in ["DE", "GERMANY"]: return "DE"
+            if c_str in ["AU", "AUSTRALIA"]: return "AU"
+            if c_str in ["IN", "INDIA"]: return "IN"
+            try:
+                c_enum = Country.from_string(c)
+                return self._get_country_code_from_enum(c_enum)
+            except Exception:
+                pass
+        return "US"
+
     def _scrape_page(self, page: int) -> List[JobPost]:
         jobs = []
         params = {
             "q": self.scraper_input.search_term or "",
-            "countryCode": "US",
+            "countryCode": self._get_country_code(),
             "radius": "30",
             "radiusUnit": "mi",
             "pageSize": str(self.jobs_per_page),
@@ -156,25 +182,32 @@ class Dice(Scraper):
 
         soup = BeautifulSoup(response.text, 'html.parser')
         raw_html = response.text
-        employment_type_raw = util.extract_employment_type_from_raw_html(raw_html)
+
+        # Exclude expired or closed jobs
+        if util.is_job_expired(soup, raw_html):
+            log.info(f"Skipping expired job {job_id} ({job_url})")
+            return None
+
+        # Extract structured data
+        job_data_from_next = util.extract_from_next_data(soup)
+        job_data_from_jsonld = util.extract_structured_data(soup)
+        employment_type_raw = util.extract_dice_employment_type(soup, job_data_from_next or job_data_from_jsonld)
 
         # Primary: __NEXT_DATA__
-        job_data_from_next = util.extract_from_next_data(soup)
         if job_data_from_next:
             job_post = self._process_next_data_job(job_data_from_next, job_id, job_url, raw_html=raw_html, employment_type_raw=employment_type_raw)
             if job_post:
                 self._apply_w2_c2c_and_link(job_post, soup, raw_html, job_id)
-                if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'w2_c2c_type', None):
+                if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'employment_type', None):
                     self._enrich_with_headless(job_post, job_url)
                 return job_post
 
         # Fallback: JSON-LD
-        job_data_from_jsonld = util.extract_structured_data(soup)
         if job_data_from_jsonld:
             job_post = self._process_structured_job(job_data_from_jsonld, job_id, job_url, soup, raw_html=raw_html, employment_type_raw=employment_type_raw)
             if job_post:
                 self._apply_w2_c2c_and_link(job_post, soup, raw_html, job_id)
-                if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'w2_c2c_type', None):
+                if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'employment_type', None):
                     self._enrich_with_headless(job_post, job_url)
                 return job_post
 
@@ -183,7 +216,7 @@ class Dice(Scraper):
         job_post = self._parse_job_detail_page(soup, job_id, job_url, raw_html=raw_html, employment_type_raw=employment_type_raw)
         if job_post:
             self._apply_w2_c2c_and_link(job_post, soup, raw_html, job_id)
-            if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'w2_c2c_type', None):
+            if not job_post.compensation or not getattr(job_post, 'experience', None) or not getattr(job_post, 'employment_type', None):
                 self._enrich_with_headless(job_post, job_url)
         return job_post
 
@@ -220,11 +253,10 @@ class Dice(Scraper):
             job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
+        if employment_type_raw:
+            object.__setattr__(job_post, 'w2_c2c_type', employment_type_raw)
         if experience: object.__setattr__(job_post, 'experience', experience)
         if skills: object.__setattr__(job_post, 'skills', skills)
-        
-        w2_c2c = util.classify_w2_c2c(title or "", description or "", raw_html or "")
-        if w2_c2c: object.__setattr__(job_post, 'w2_c2c_type', w2_c2c)
         
         return job_post
 
@@ -232,7 +264,7 @@ class Dice(Scraper):
         title = job_data.get('title')
         company = job_data.get('hiringOrganization', {}).get('name')
         loc = job_data.get('jobLocation', {}).get('address', {})
-        location = Location(city=loc.get('addressLocality'), state=loc.get('addressRegion'), country=loc.get('addressCountry') or 'USA')
+        location = Location(city=loc.get('addressLocality'), state=loc.get('addressRegion'), country=loc.get('addressCountry') or self._get_country_code())
         description = util.clean_description(job_data.get('description', ''))
         date_posted = job_data.get('datePosted', '').split('T')[0] if job_data.get('datePosted') else None
         
@@ -257,11 +289,10 @@ class Dice(Scraper):
             job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
+        if employment_type_raw:
+            object.__setattr__(job_post, 'w2_c2c_type', employment_type_raw)
         if experience: object.__setattr__(job_post, 'experience', experience)
         if skills: object.__setattr__(job_post, 'skills', skills)
-        
-        w2_c2c = util.classify_w2_c2c(title or "", description or "", raw_html or "")
-        if w2_c2c: object.__setattr__(job_post, 'w2_c2c_type', w2_c2c)
         
         return job_post
 
@@ -304,11 +335,10 @@ class Dice(Scraper):
             job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
+        if employment_type_raw:
+            object.__setattr__(job_post, 'w2_c2c_type', employment_type_raw)
         if experience: object.__setattr__(job_post, 'experience', experience)
         if skills: object.__setattr__(job_post, 'skills', skills)
-        
-        w2_c2c = util.classify_w2_c2c(title or "", description or "", raw_html or "")
-        if w2_c2c: object.__setattr__(job_post, 'w2_c2c_type', w2_c2c)
         
         return job_post
 
@@ -329,9 +359,13 @@ class Dice(Scraper):
         return f"https://www.dice.com/job-applications/{job_id}/start-apply"
 
     def _apply_w2_c2c_and_link(self, job_post: JobPost, soup: BeautifulSoup, raw_html: str, job_id: str) -> None:
-        if not getattr(job_post, 'w2_c2c_type', None):
-            w2_c2c = self._extract_w2_c2c_from_header_card(soup)
-            if w2_c2c: object.__setattr__(job_post, 'w2_c2c_type', w2_c2c)
+        if not getattr(job_post, 'employment_type', None):
+            emp = util.extract_dice_employment_type(soup)
+            if emp:
+                object.__setattr__(job_post, 'employment_type', emp)
+                object.__setattr__(job_post, 'w2_c2c_type', emp)
+        elif not getattr(job_post, 'w2_c2c_type', None):
+            object.__setattr__(job_post, 'w2_c2c_type', getattr(job_post, 'employment_type', None))
         if not job_post.job_url_direct:
             dice_apply_url = self._extract_dice_apply_url(raw_html, job_id)
             if dice_apply_url: job_post.job_url_direct = dice_apply_url
@@ -399,10 +433,12 @@ class Dice(Scraper):
                 object.__setattr__(job_post, 'experience', experience)
                 log.info(f"[Headless] ✓ Experience enriched: {experience}")
 
-        headless_w2_c2c = self._headless_extract_w2_c2c(soup)
-        if headless_w2_c2c:
-            object.__setattr__(job_post, 'w2_c2c_type', headless_w2_c2c)
-            log.info(f"[Headless] ✓ W2/C2C enriched: {headless_w2_c2c}")
+        if not getattr(job_post, 'employment_type', None):
+            headless_emp = util.extract_dice_employment_type(soup) or self._headless_extract_w2_c2c(soup)
+            if headless_emp:
+                object.__setattr__(job_post, 'employment_type', headless_emp)
+                object.__setattr__(job_post, 'w2_c2c_type', headless_emp)
+                log.info(f"[Headless] ✓ Employment type enriched: {headless_emp}")
 
     def _headless_extract_w2_c2c(self, soup: BeautifulSoup) -> Optional[str]:
         badge_texts: List[str] = []

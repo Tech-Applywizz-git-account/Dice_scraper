@@ -2,6 +2,7 @@ import argparse
 import csv
 import sys
 import time
+from datetime import datetime, timezone
 from config import REDIS_URL, TEST_CLIENT_IDS
 from api_client import get_active_clients, get_client_details, extract_client_requirements, get_job_roles
 from filtering import filter_jobs_for_client, resolve_allowed_roles, extract_job_experience, clean_role_name
@@ -14,11 +15,19 @@ def build_search_roles(requirements, role_data):
     country = requirements.get("country", "United States")
     allowed = resolve_allowed_roles(primary_role, alt_roles, role_data, country)
     
-    # Ensure primary role is first if available
     search_roles = []
-    if primary_role and primary_role.lower() in [a.lower() for a in allowed]:
+    # 1. Primary role first
+    if primary_role:
         search_roles.append(primary_role)
         
+    # 2. Client's explicit alternate roles
+    if alt_roles and str(alt_roles).strip().lower() != 'na':
+        for alt in str(alt_roles).split(','):
+            a_clean = alt.strip()
+            if a_clean and a_clean.lower() not in [s.lower() for s in search_roles]:
+                search_roles.append(a_clean)
+                
+    # 3. Domain expanded roles from role_data
     for r in allowed:
         if r.lower() not in [s.lower() for s in search_roles]:
             search_roles.append(r)
@@ -51,12 +60,13 @@ def process_client(applywizz_id, to_db: bool = True):
         all_jobs = []
         # Scrape Dice for each role and location combination
         print("Dice scraping started...")
+        client_country = requirements.get("country") or "United States"
         for role in search_roles:
             if not role: continue
             for location in locations:
                 if not location: continue
                 # print(f"Scraping Dice for role: '{role}' in '{location}' for {applywizz_id}")
-                jobs = get_jobs_from_dice(role, location, "USA")
+                jobs = get_jobs_from_dice(role, location, client_country)
                 all_jobs.extend(jobs)
                 # Respect rate limits, small sleep
                 time.sleep(1)
@@ -116,11 +126,12 @@ def process_client(applywizz_id, to_db: bool = True):
                 'job_experience': job_exp_str,
                 'job_location': loc_str,
                 'job_url': job.job_url,
+                'company': job.company_name or '',
+                'company_email': requirements.get('company_email', None),
+                'scraped_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
                 # DB / internal compatibility fields
                 'url': job.job_url,
-                'title': job.title,
-                'company': job.company_name or '',
-                'company_email': requirements.get('company_email', None)
+                'title': job.title
             }
             client_records.append(record)
             
@@ -149,8 +160,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Render Worker for Dice Scraper")
     parser.add_argument('--test-mode', action='store_true', help="Run local test without Redis/Database and export to CSV")
     parser.add_argument('--clients', '--ids', type=str, default=None, help="Comma-separated client IDs to test (e.g. AWL-39223,AWL-32830)")
-    parser.add_argument('--limit', type=int, default=2, help="Number of active clients to test if no IDs specified (default: 2)")
-    parser.add_argument('--csv', type=str, default="test_results_2_clients.csv", help="Output CSV path for test mode")
+    parser.add_argument('--limit', type=int, default=None, help="Number of active clients to test (default: all active clients)")
+    parser.add_argument('--csv', type=str, default="test_results_clients.csv", help="Output CSV path for test mode")
     args = parser.parse_args()
     
     if args.test_mode:
@@ -162,10 +173,14 @@ if __name__ == '__main__':
             test_ids = [c.strip() for c in TEST_CLIENT_IDS.split(',') if c.strip()]
             print(f"Running in TEST MODE with client IDs from TEST_CLIENT_IDS: {test_ids}")
         else:
-            print(f"Running in TEST MODE with first {args.limit} active clients...")
             try:
                 active_ids = get_active_clients()
-                test_ids = active_ids[:args.limit]
+                if args.limit:
+                    print(f"Running in TEST MODE with first {args.limit} of {len(active_ids)} active clients...")
+                    test_ids = active_ids[:args.limit]
+                else:
+                    print(f"Running in TEST MODE with all {len(active_ids)} active clients...")
+                    test_ids = active_ids
             except Exception as e:
                 print(f"Failed to fetch active clients: {e}")
                 sys.exit(1)
@@ -192,7 +207,10 @@ if __name__ == '__main__':
             'job_role',
             'job_experience',
             'job_location',
-            'job_url'
+            'job_url',
+            'company',
+            'company_email',
+            'scraped_at'
         ]
         
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:

@@ -46,6 +46,116 @@ def find_career_url_in_dict(obj: Any) -> Optional[str]:
                 return result
     return None
 
+def normalize_employment_badge(badge_text: str) -> Optional[str]:
+    """Normalizes an individual employment badge string from Dice header card."""
+    if not badge_text:
+        return None
+    b = badge_text.strip().lower()
+    
+    # Contract / W2 / C2C variations
+    if 'contract w2' in b or 'contract w-2' in b:
+        return 'Contract W2'
+    if 'contract independent' in b or 'independent contractor' in b:
+        return 'Contract Independent'
+    if 'contract corp to corp' in b or 'contract c2c' in b or 'corp to corp' in b or 'corp-to-corp' in b or 'c2c' in b:
+        return 'Contract Corp To Corp'
+    if '1099' in b:
+        return '1099'
+    if b == 'contract' or 'contract to hire' in b:
+        return 'Contract'
+    if b == 'w2' or b == 'w-2':
+        return 'Contract W2'
+        
+    # Full Time variations
+    if b in ['full time', 'full-time', 'fulltime', 'full_time']:
+        return 'Full Time'
+        
+    # Internship variations
+    if 'internship' in b or b in ['intern', 'co-op', 'coop', 'co-operative']:
+        return 'Internship'
+        
+    # Part Time variations
+    if b in ['part time', 'part-time', 'parttime', 'part_time']:
+        return 'Part Time'
+        
+    return None
+
+def extract_dice_employment_type(soup: BeautifulSoup, job_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Extracts the normalized employment type for the CURRENT Dice job.
+    Prioritizes the job detail header card badges.
+    Falls back to current job's structured data (JSON-LD or __NEXT_DATA__).
+    Does NOT scan arbitrary page HTML or unrelated job recommendations.
+    """
+    if not soup:
+        return None
+
+    # 1. Primary: Extract from header card badges
+    header_card = soup.find(attrs={'data-testid': 'job-detail-header-card'})
+    if header_card:
+        badge_elements = header_card.find_all(class_=re.compile(r'SeuiInfoBadge', re.I))
+        if not badge_elements:
+            badge_elements = header_card.find_all(attrs={'data-testid': re.compile(r'badge|chip', re.I)})
+            
+        found_badges = []
+        for elem in badge_elements:
+            text = elem.get_text(strip=True)
+            norm = normalize_employment_badge(text)
+            if norm and norm not in found_badges:
+                found_badges.append(norm)
+                
+        if found_badges:
+            return ", ".join(found_badges)
+            
+    # 2. Fallback: Structured JSON-LD for the current job (@type == 'JobPosting')
+    for script in soup.find_all('script', type='application/ld+json'):
+        try:
+            data = json.loads(script.string)
+            candidate = None
+            if isinstance(data, dict) and data.get('@type') == 'JobPosting':
+                candidate = data.get('employmentType')
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get('@type') == 'JobPosting':
+                        candidate = item.get('employmentType')
+                        break
+            if candidate:
+                cand_str = str(candidate).strip()
+                cand_lower = cand_str.lower()
+                if 'full_time' in cand_lower or cand_lower == 'full time':
+                    return 'Full Time'
+                elif 'contractor' in cand_lower or 'contract' in cand_lower:
+                    return 'Contract'
+                elif 'intern' in cand_lower:
+                    return 'Internship'
+                elif 'part_time' in cand_lower or cand_lower == 'part time':
+                    return 'Part Time'
+                norm = normalize_employment_badge(cand_str)
+                if norm:
+                    return norm
+        except Exception:
+            continue
+            
+    # 3. Fallback: job_data from __NEXT_DATA__
+    if job_data and isinstance(job_data, dict):
+        raw_jt = job_data.get('employmentType') or job_data.get('jobType')
+        if raw_jt:
+            cand_str = str(raw_jt).strip()
+            cand_lower = cand_str.lower()
+            if 'full_time' in cand_lower or cand_lower == 'full time':
+                return 'Full Time'
+            elif 'contractor' in cand_lower or 'contract' in cand_lower:
+                return 'Contract'
+            elif 'intern' in cand_lower:
+                return 'Internship'
+            elif 'part_time' in cand_lower or cand_lower == 'part time':
+                return 'Part Time'
+            norm = normalize_employment_badge(cand_str)
+            if norm:
+                return norm
+
+    return None
+
 def extract_employment_type_from_raw_html(raw_html: str) -> Optional[str]:
     if not raw_html:
         return None
@@ -413,6 +523,37 @@ def extract_from_next_data(soup: BeautifulSoup) -> Optional[Dict[str, Any]]:
         pass
     return None
 
+def is_job_expired(soup: BeautifulSoup, raw_html: str = "") -> bool:
+    """
+    Checks if a Dice job posting is expired or no longer available.
+    Dice returns HTTP 200 even for expired postings, but displays an inline warning:
+    e.g. 'Sorry this job is no longer available. The Similar Jobs shown below might interest you.'
+    """
+    if not soup and not raw_html:
+        return False
+
+    if soup:
+        alert_elements = soup.find_all(attrs={"data-testid": "inline-message"})
+        alert_elements += soup.find_all(attrs={"role": "alert"})
+        for el in alert_elements:
+            txt = el.get_text().lower()
+            if any(p in txt for p in ["no longer available", "expired", "closed"]):
+                return True
+
+    text_to_check = soup.get_text().lower() if soup else (raw_html.lower() if raw_html else "")
+    expiry_phrases = [
+        "this job is no longer available",
+        "job is no longer available",
+        "sorry this job is no longer available",
+        "this job has expired",
+        "position has expired",
+        "job posting has expired",
+    ]
+    if any(phrase in text_to_check for phrase in expiry_phrases):
+        return True
+
+    return False
+
 def extract_structured_data(soup: BeautifulSoup) -> Optional[Dict[str, Any]]:
     for script in soup.find_all('script', type='application/ld+json'):
         try:
@@ -502,14 +643,47 @@ def extract_salary_from_json(job_data: Dict[str, Any]) -> Optional[Compensation]
             pass
     return None
 
+NON_US_COUNTRIES = {
+    'uk': 'UK', 'united kingdom': 'UK', 'great britain': 'UK', 'england': 'UK', 'scotland': 'UK', 'wales': 'UK', 'gb': 'UK',
+    'ca': 'CA', 'canada': 'CA',
+    'ie': 'IE', 'ireland': 'IE',
+    'de': 'DE', 'germany': 'DE',
+    'in': 'IN', 'india': 'IN',
+    'au': 'AU', 'australia': 'AU',
+}
+CA_PROVINCES = {'on', 'ontario', 'bc', 'british columbia', 'ab', 'alberta', 'qc', 'quebec', 'mb', 'manitoba', 'sk', 'saskatchewan', 'ns', 'nova scotia', 'nb', 'new brunswick', 'nl', 'newfoundland', 'pe', 'prince edward island'}
+US_COUNTRY_ALIASES = {'us', 'usa', 'united states'}
+
 def parse_location(location_text: str) -> Optional[Location]:
     if not location_text:
         return None
     location_text = re.sub(r'^(location:?\s*|city:?\s*|in\s+)', '', location_text, flags=re.I)
-    parts = [p.strip() for p in location_text.split(',')]
-    if len(parts) >= 2:
-        return Location(city=parts[0], state=parts[1], country=parts[2] if len(parts) > 2 else 'USA')
-    return None
+    parts = [p.strip() for p in location_text.split(',') if p.strip()]
+    if not parts:
+        return None
+
+    if len(parts) == 1:
+        p_low = parts[0].lower()
+        if p_low in NON_US_COUNTRIES:
+            return Location(country=NON_US_COUNTRIES[p_low])
+        elif p_low in US_COUNTRY_ALIASES:
+            return Location(country='USA')
+        return Location(city=parts[0])
+
+    if len(parts) == 2:
+        p0, p1 = parts[0], parts[1]
+        p1_low = p1.lower()
+        if p1_low in NON_US_COUNTRIES:
+            return Location(city=p0, country=NON_US_COUNTRIES[p1_low])
+        if p1_low in CA_PROVINCES:
+            return Location(city=p0, state=p1, country='CA')
+        if p1_low in US_COUNTRY_ALIASES:
+            return Location(city=p0, country='USA')
+        return Location(city=p0, state=p1, country='USA')
+
+    p_last_low = parts[-1].lower()
+    c_str = NON_US_COUNTRIES.get(p_last_low) or ('USA' if p_last_low in US_COUNTRY_ALIASES else parts[-1])
+    return Location(city=parts[0], state=parts[1], country=c_str)
 
 def parse_posted_date(date_text: str) -> Optional[str]:
     if not date_text:
@@ -540,15 +714,32 @@ def map_job_type(job_type_text: str) -> Optional[JobType]:
             return value
     return None
 
-def classify_w2_c2c(title: str, description: str, full_page_text: str = "") -> Optional[str]:
-    combined = f"{title} {description} {full_page_text}".lower()
-    C2C_KEYWORDS = ['c2c', 'c-2-c', 'c 2 c', 'corp to corp', 'corp-to-corp', 'corp - to - corp', 'corporation to corporation']
-    W2_KEYWORDS = ['w2', 'w-2', 'w 2', 'on w2', 'on a w2']
-    CONTRACT_EMPLOYMENT_PHRASES = ['contract w2', 'contract to hire', 'contract position', 'contract role', 'contract opportunity', 'contract employment', 'contract worker', 'contract staff', 'contract engagement', 'contract job', 'employment type: contract', 'employment type:contract', 'job type: contract', 'job type:contract', 'contractual position', 'contractual role', 'contractual employment', '1099', 'independent contractor', 'contract independent']
+def classify_w2_c2c(title: str = "", description: str = "", full_page_text: str = "", employment_type: str = "") -> Optional[str]:
+    """
+    Classifies job into 'W2', 'C2C', or None.
+    Uses normalized employment_type first.
+    Never scans broad full_page_text to avoid matching JavaScript chunks or CSS classes.
+    """
+    emp_lower = (employment_type or "").lower().strip()
+    if emp_lower:
+        if any(k in emp_lower for k in ['c2c', 'c-2-c', 'corp to corp', 'corp-to-corp']):
+            return 'C2C'
+        if any(k in emp_lower for k in ['w2', 'w-2', '1099', 'contract independent', 'independent contractor']):
+            return 'W2'
+        if 'contract' in emp_lower:
+            return 'W2'
+        if 'full time' in emp_lower or 'internship' in emp_lower:
+            return None
+
+    # Targeted phrases in title only if employment_type is not present
+    combined = f"{title}".lower()
+    C2C_KEYWORDS = ['c2c', 'c-2-c', 'corp to corp', 'corp-to-corp']
+    W2_KEYWORDS = ['contract w2', 'contract independent', 'contract corp to corp', '1099', 'independent contractor']
     
-    if any(kw in combined for kw in W2_KEYWORDS): return 'W2'
-    if any(kw in combined for kw in C2C_KEYWORDS): return 'C2C'
-    if any(phrase in combined for phrase in CONTRACT_EMPLOYMENT_PHRASES): return 'W2'
+    if any(re.search(r'\b' + re.escape(kw) + r'\b', combined) for kw in C2C_KEYWORDS):
+        return 'C2C'
+    if any(re.search(r'\b' + re.escape(kw) + r'\b', combined) for kw in W2_KEYWORDS):
+        return 'W2'
     return None
 
 def extract_external_apply_url_fallback(soup: BeautifulSoup, job_data: Optional[Dict] = None) -> Optional[str]:
