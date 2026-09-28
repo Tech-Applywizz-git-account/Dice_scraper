@@ -31,10 +31,13 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
         hours = 72
         results_wanted = 30
 
+    default_loc = country_str if country_str and str(country_str).strip() else "United States"
+    target_loc = location if location and str(location).strip() else default_loc
+
     scraper_input = ScraperInput(
         site_type=[Site.DICE],
         search_term=search_term,
-        location=location if location and str(location).strip() else "United States",
+        location=target_loc,
         country=country_enum,
         results_wanted=results_wanted,
         hours_old=hours,
@@ -45,13 +48,6 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
     try:
         job_response = scraper.scrape(scraper_input)
         jobs = job_response.jobs
-        
-        # If no jobs found with easy_apply=True in a specific location, fallback to all apply types
-        if not jobs and location and location.lower() != "united states":
-            scraper_input.easy_apply = False
-            job_response = scraper.scrape(scraper_input)
-            jobs = job_response.jobs
-            
         DICE_CACHE[cache_key] = jobs
         return jobs
     except Exception as e:

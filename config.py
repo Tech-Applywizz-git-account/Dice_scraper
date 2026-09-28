@@ -23,6 +23,9 @@ HOURS_OLD = int(os.getenv("HOURS_OLD", "72"))
 # Optional test client IDs for local test mode (e.g. "AWL-39223,AWL-32830")
 TEST_CLIENT_IDS = os.getenv("TEST_CLIENT_IDS", "")
 
+# Optional local JSON file for specific clients to scrape daily (e.g. "clients.json")
+CLIENTS_FILE = os.getenv("CLIENTS_FILE", "clients.json")
+
 def validate_config():
     if not DATABASE_URL:
         raise ValueError("CRITICAL ERROR: DATABASE_URL environment variable is missing. It is required for connecting to Azure PostgreSQL.")

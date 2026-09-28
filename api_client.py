@@ -1,10 +1,34 @@
+import os
+import json
 import re
 import requests
-from config import ACTIVE_CLIENTS_URL, CLIENT_DETAILS_URL, JOB_ROLES_URL
+from config import ACTIVE_CLIENTS_URL, CLIENT_DETAILS_URL, JOB_ROLES_URL, CLIENTS_FILE
 from filtering import extract_state_from_location
 
 def get_active_clients():
-    """Fetches the list of active applywizz_ids."""
+    """
+    Fetches the list of active applywizz_ids.
+    If CLIENTS_FILE (default: 'clients.json') exists and is non-empty, reads IDs from the JSON file.
+    Otherwise, falls back to the live ACTIVE_CLIENTS_URL endpoint.
+    """
+    if CLIENTS_FILE and os.path.exists(CLIENTS_FILE):
+        try:
+            with open(CLIENTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                ids = [str(x).strip() for x in data if str(x).strip()]
+                if ids:
+                    print(f"Loaded {len(ids)} clients from {CLIENTS_FILE}: {ids}")
+                    return ids
+            elif isinstance(data, dict):
+                ids = data.get("applywizz_ids") or data.get("clients") or []
+                ids = [str(x).strip() for x in ids if str(x).strip()]
+                if ids:
+                    print(f"Loaded {len(ids)} clients from {CLIENTS_FILE}: {ids}")
+                    return ids
+        except Exception as e:
+            print(f"Warning: Failed to read {CLIENTS_FILE}: {e}. Falling back to API.")
+
     response = requests.get(ACTIVE_CLIENTS_URL)
     response.raise_for_status()
     data = response.json()
@@ -26,8 +50,8 @@ def extract_client_requirements(client_details):
     """
     Extracts needed requirements from the client details API response.
     """
-    client_info = client_details.get("client", {})
-    add_info = client_details.get("additional_information", {})
+    client_info = client_details.get("client") or {}
+    add_info = client_details.get("additional_information") or {}
     
     applywizz_id = client_info.get("applywizz_id")
     
@@ -36,9 +60,19 @@ def extract_client_requirements(client_details):
     if not role:
         job_prefs = client_info.get("job_role_preferences", [])
         if job_prefs:
-            role = job_prefs[0]
+            role = str(job_prefs[0]).replace("_", " ").strip()
+    elif isinstance(role, str):
+        role = role.replace("_", " ").strip()
             
     alternate_roles = add_info.get("alternate_job_roles", "")
+    if not alternate_roles or str(alternate_roles).strip().lower() in ["", "na", "none", "null"]:
+        job_prefs = client_info.get("job_role_preferences", [])
+        if len(job_prefs) > 1:
+            alternate_roles = ", ".join(str(p).replace("_", " ").strip() for p in job_prefs[1:] if p)
+        else:
+            alternate_roles = ""
+    elif isinstance(alternate_roles, str):
+        alternate_roles = alternate_roles.replace("_", " ").strip()
     
     # Parse experience, preserving raw string and supporting decimals
     experience_str = str(add_info.get("experience", "")).strip()
@@ -53,9 +87,18 @@ def extract_client_requirements(client_details):
         
     sponsorship = client_info.get("sponsorship", False)
     
-    work_preference = str(add_info.get("work_preferences", "")).lower()
+    raw_locations = client_info.get("location_preferences", []) or []
+    NON_GEO_WORK_MODES = {"onsite", "remote", "hybrid", "work from home", "wfh", "open to remote", "remote only"}
+    
+    work_preference = str(add_info.get("work_preferences", "")).lower().strip()
     if work_preference not in ["remote", "hybrid"]:
-        work_preference = "all"
+        lower_loc_modes = [str(l).strip().lower() for l in raw_locations if str(l).strip().lower() in NON_GEO_WORK_MODES]
+        if "remote" in lower_loc_modes and "onsite" not in lower_loc_modes and "hybrid" not in lower_loc_modes:
+            work_preference = "remote"
+        elif "hybrid" in lower_loc_modes and "onsite" not in lower_loc_modes and "remote" not in lower_loc_modes:
+            work_preference = "hybrid"
+        else:
+            work_preference = "all"
         
     exclude_companies = add_info.get("exclude_companies", "[]")
     try:
@@ -95,6 +138,7 @@ def extract_client_requirements(client_details):
     valid_locs = [
         str(l).strip() for l in raw_locations 
         if str(l).strip() and str(l).strip().lower() not in ["no", "none", "na", "n/a", "nil", "null"]
+        and str(l).strip().lower() not in NON_GEO_WORK_MODES
     ]
     
     locations = []
@@ -102,7 +146,7 @@ def extract_client_requirements(client_details):
         if not loc_name:
             return
         loc_clean = str(loc_name).strip()
-        if not loc_clean or loc_clean.lower() in ["no", "none", "na", "n/a", "nil", "null"]:
+        if not loc_clean or loc_clean.lower() in ["no", "none", "na", "n/a", "nil", "null"] or loc_clean.lower() in NON_GEO_WORK_MODES:
             return
         if loc_clean.lower() not in [l.lower() for l in locations]:
             locations.append(loc_clean)

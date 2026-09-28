@@ -1,7 +1,7 @@
 import re
 import math
 import itertools
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 # US States mapping: 2-letter postal code <-> full lowercase state name
 US_STATES = {
@@ -49,7 +49,8 @@ def clean_role_name(role: str) -> str:
     """Removes country/visa suffixes like 'for UK', 'for Canada', '(citizen/h4ead)'."""
     if not role:
         return ""
-    r = re.sub(r'\s+for\s+[a-zA-Z\s]+', '', role, flags=re.IGNORECASE)
+    r = str(role).replace('_', ' ')
+    r = re.sub(r'\s+for\s+[a-zA-Z\s]+', '', r, flags=re.IGNORECASE)
     r = re.sub(r'\(.*?\)', '', r)
     return r.strip().lower()
 
@@ -265,7 +266,7 @@ def is_seniority_compatible(job_title: str, client_exp: float, client_wants_inte
     
     # 1. Internship / Trainee
     if is_internship_or_trainee_role(t_lower):
-        if not client_wants_internship and client_exp >= 1.0:
+        if not client_wants_internship and client_exp > 0:
             return False
             
     # 2. Executive / Principal / Staff / Architect / Director / VP
@@ -284,6 +285,72 @@ def is_seniority_compatible(job_title: str, client_exp: float, client_wants_inte
             return False
             
     return True
+
+
+def matches_employment_type(job: Any, client_exp: float = 0.0) -> Tuple[bool, str]:
+    """
+    Validates whether the job's employment type is acceptable for the client.
+    Priority order:
+    1. If it contains Full Time, allow.
+    2. If it contains Contract W2 / W2, allow (accepted for all clients).
+    3. If it contains other contract types (C2C, Corp to Corp, 1099, Independent Contractor, unspecified contract), reject.
+    4. If it contains Internship:
+       - allow only when client experience is exactly 0 (<= 0.0).
+       - reject when client experience > 0.
+    5. If employment type is missing or ambiguous, reject conservatively.
+    
+    Returns (is_accepted, reason).
+    """
+    emp_type = getattr(job, 'employment_type', None) or getattr(job, 'w2_c2c_type', None)
+    
+    # Check job_type list as fallback if string attributes are missing
+    if not emp_type and getattr(job, 'job_type', None):
+        types_str = [jt.value[0] if hasattr(jt, 'value') else str(jt) for jt in job.job_type if jt]
+        if types_str:
+            emp_type = ", ".join(types_str)
+            
+    if not emp_type:
+        return False, "missing_employment_type"
+        
+    emp_str = str(emp_type).strip()
+    if not emp_str or emp_str.lower() in ['none', 'null', 'not specified', 'unknown', 'na', 'n/a', '']:
+        return False, "missing_employment_type"
+        
+    emp_lower = emp_str.lower()
+    
+    # Priority 1: Accept Full Time
+    if re.search(r'\bfull[\s\-_]*time\b', emp_lower):
+        return True, "full_time"
+        
+    # Priority 2: Accept Contract W2 (W2 is allowed for all clients)
+    if re.search(r'\b(contract\s+w-?2|w-?2)\b', emp_lower):
+        return True, "w2_contract"
+        
+    # Priority 3: Reject non-W2 contracts (C2C, Corp to Corp, 1099, Independent Contractor, unspecified contract)
+    contract_rejected_patterns = [
+        r'\bcorp\s*[-–]?\s*to\s*[-–]?\s*corp\b',
+        r'\bcontract\s+corp\s+to\s+corp\b',
+        r'\bcontract\s+c2c\b',
+        r'\bc2c\b',
+        r'\bc-2-c\b',
+        r'\b1099\b',
+        r'\bindependent\s+contractor\b',
+        r'\bcontract\s+independent\b',
+        r'\bcontract\s+to\s+hire\b',
+        r'\bcontract\b',
+    ]
+    if any(re.search(pat, emp_lower) for pat in contract_rejected_patterns):
+        return False, "contract"
+        
+    # Priority 4: Internship
+    if re.search(r'\b(intern|internship|co-?op)\b', emp_lower):
+        if client_exp <= 0.0:
+            return True, "internship_allowed_for_0_exp"
+        else:
+            return False, "internship_rejected_for_experienced_client"
+            
+    # Priority 5: Missing or ambiguous employment type (e.g. Part Time, Third Party, etc.)
+    return False, "ambiguous_employment_type"
 
 
 def calculate_max_experience(client_exp_val: float, client_exp_raw: str = "") -> float:
@@ -345,20 +412,40 @@ def extract_job_experience(job) -> Optional[float]:
     return None
 
 
-def matches_location_preference(job, location_preferences: List[str], work_preference: str = "all") -> bool:
+def matches_location_preference(job, location_preferences: List[str], work_preference: str = "all", client_country: str = "United States") -> bool:
     """
     Checks if job matches the client's location preferences.
-    Handles state names, 2-letter state abbreviations, cities, and remote options.
+    Handles state names, 2-letter state abbreviations, cities, countries, and remote options.
     """
     if not location_preferences:
         return True
         
+    norm_client_country = str(client_country or "United States").strip().lower()
+
     # Check if nationwide or unconstrained
     for p in location_preferences:
         if not p: continue
         p_clean = str(p).strip().lower()
-        if p_clean in ["united states", "usa", "us", "all", "na", "no", "none", "n/a"]:
+        if p_clean in ["all", "na", "no", "none", "n/a"]:
             return True
+        if p_clean in ["united states", "usa", "us"]:
+            if norm_client_country in ["united states", "usa", "us"]:
+                return True
+        for c_main, aliases in [
+            ("united kingdom", ["united kingdom", "uk", "great britain", "gb", "england", "scotland", "wales"]),
+            ("canada", ["canada", "ca"]),
+            ("ireland", ["ireland", "ie"]),
+            ("germany", ["germany", "de"]),
+            ("australia", ["australia", "au"]),
+            ("india", ["india", "in"])
+        ]:
+            if p_clean in aliases:
+                job_cntry = str(getattr(getattr(job, 'location', None), 'country', '') or '').strip().lower()
+                job_disp = (job.location.display_location() if hasattr(job, 'location') and job.location and hasattr(job.location, 'display_location') else str(getattr(job, 'location', '') or '')).lower()
+                if job_cntry in aliases or any(re.search(r'\b' + re.escape(a) + r'\b', job_disp) for a in aliases):
+                    return True
+                if norm_client_country in aliases and (getattr(job, 'is_remote', False) or not getattr(job, 'location', None)):
+                    return True
             
     # Extract preferred state codes, names, and cities
     pref_state_codes: Set[str] = set()
@@ -491,10 +578,11 @@ def filter_jobs_for_client(jobs, requirements):
     primary_role = requirements.get("role", "")
     alternate_roles = requirements.get("alternate_roles", "")
     role_data = requirements.get("role_data", None)
-    allowed_roles = resolve_allowed_roles(primary_role, alternate_roles, role_data)
+    country = requirements.get("country", "United States")
+    allowed_roles = resolve_allowed_roles(primary_role, alternate_roles, role_data, country=country)
     
     client_prefs = "na"
-    rejection_reasons = {"company": 0, "role": 0, "seniority": 0, "experience": 0, "location": 0, "work_pref": 0, "sponsorship": 0, "client_prefs": 0}
+    rejection_reasons = {"company": 0, "role": 0, "employment_type": 0, "seniority": 0, "experience": 0, "location": 0, "work_pref": 0, "sponsorship": 0, "client_prefs": 0}
     
     for job in jobs:
         if not job or not getattr(job, 'job_url', None):
@@ -515,10 +603,16 @@ def filter_jobs_for_client(jobs, requirements):
             rejection_reasons["role"] += 1
             continue
             
-        # 2b. Seniority & Internship check
+        # 2b. Employment type check (Full Time vs Contract/W2/C2C vs Internship)
+        client_exp_float = float(client_exp_val) if client_exp_val else 0.0
+        is_emp_ok, emp_reason = matches_employment_type(job, client_exp_float)
+        if not is_emp_ok:
+            rejection_reasons["employment_type"] += 1
+            continue
+
+        # 2c. Seniority & Internship check
         client_roles_text = f"{primary_role} {alternate_roles}"
         client_wants_internship = is_internship_or_trainee_role(client_roles_text)
-        client_exp_float = float(client_exp_val) if client_exp_val else 0.0
         if not is_seniority_compatible(job_title, client_exp_float, client_wants_internship):
             rejection_reasons["seniority"] += 1
             continue
@@ -530,7 +624,7 @@ def filter_jobs_for_client(jobs, requirements):
             continue
             
         # 4. Location preference check
-        if not matches_location_preference(job, locations, work_pref):
+        if not matches_location_preference(job, locations, work_pref, client_country=country):
             rejection_reasons["location"] += 1
             continue
             
@@ -553,7 +647,7 @@ def filter_jobs_for_client(jobs, requirements):
                 
         # 6. Sponsorship check
         if sponsorship == 'yes':
-            if "no sponsorship" in desc_lower or "no h1b" in desc_lower or "no corp to corp" in desc_lower or "no c2c" in desc_lower:
+            if "no sponsorship" in desc_lower or "no h1b" in desc_lower:
                 rejection_reasons["sponsorship"] += 1
                 continue
                 
