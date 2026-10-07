@@ -115,6 +115,13 @@ def process_client(applywizz_id, to_db: bool = True):
                 if alts_only:
                     alt_roles = ", ".join(alts_only)
                 
+            search_keyword, search_location = job_trace_map.get(job.job_url, ("", ""))
+            job_type_val = getattr(job, 'job_type', "")
+            if job_type_val and hasattr(job_type_val, 'value'):
+                job_type_val = job_type_val.value
+            elif job_type_val and isinstance(job_type_val, list):
+                job_type_val = ", ".join([v.value if hasattr(v, 'value') else str(v) for v in job_type_val])
+                
             record = {
                 'awl_id': applywizz_id,
                 'client_experience': requirements.get('experience_raw', requirements.get('experience', '')),
@@ -128,10 +135,18 @@ def process_client(applywizz_id, to_db: bool = True):
                 'job_url': job.job_url,
                 'company': job.company_name or '',
                 'company_email': requirements.get('company_email', None),
-                'scraped_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                'scraped_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if 'timezone' in globals() else None,
                 # DB / internal compatibility fields
                 'url': job.job_url,
-                'title': job.title
+                'title': job.title,
+                'description': getattr(job, 'description', '') or "",
+                'location': loc_str,
+                'job_type': str(job_type_val),
+                'scraped_experience': str(getattr(job, 'experience', "") or ""),
+                'search_keyword': search_keyword,
+                'search_location': search_location,
+                'posted_at': getattr(job, 'posted_at', '') or "",
+                'updated_at': getattr(job, 'updated_at', '') or ""
             }
             client_records.append(record)
             
@@ -142,7 +157,15 @@ def process_client(applywizz_id, to_db: bool = True):
                 'title': r['title'],
                 'company': r['company'],
                 'applywizz_id': r['awl_id'],
-                'company_email': r['company_email']
+                'company_email': r['company_email'],
+                'description': r['description'],
+                'location': r['location'],
+                'job_type': r['job_type'],
+                'scraped_experience': r['scraped_experience'],
+                'search_keyword': r['search_keyword'],
+                'search_location': r['search_location'],
+                'posted_at': r['posted_at'],
+                'updated_at': r['updated_at']
             } for r in client_records]
             
             inserted, skipped = upsert_jobs(db_jobs)
@@ -210,7 +233,11 @@ if __name__ == '__main__':
             'job_url',
             'company',
             'company_email',
-            'scraped_at'
+            'scraped_at',
+            'posted_at',
+            'updated_at',
+            'job_type',
+            'scraped_experience'
         ]
         
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:

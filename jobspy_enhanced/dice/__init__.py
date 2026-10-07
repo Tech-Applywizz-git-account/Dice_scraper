@@ -48,6 +48,25 @@ class Dice(Scraper):
         self.seen_urls = set()
         self.base_url = DICE_BASE_URL
 
+    def _extract_posted_and_updated(self, raw_str: str, description: str) -> Tuple[Optional[str], Optional[str]]:
+        posted_at = None
+        updated_at = None
+        combined_text = (str(raw_str or '') + ' ' + str(description or '')).strip()
+        
+        m_posted = re.search(r'Posted(?:\s*at|on|:)?\s*([a-zA-Z0-9\s/-:]+(?:ago|AM|PM)?)', combined_text, re.IGNORECASE)
+        if m_posted: posted_at = m_posted.group(0).strip()
+        
+        m_updated = re.search(r'Updated(?:\s*at|on|:)?\s*([a-zA-Z0-9\s/-:]+(?:ago|AM|PM)?)', combined_text, re.IGNORECASE)
+        if m_updated: updated_at = m_updated.group(0).strip()
+        
+        if not posted_at and not updated_at and raw_str:
+            if 'update' in str(raw_str).lower():
+                updated_at = str(raw_str).strip()
+            else:
+                posted_at = str(raw_str).strip()
+                
+        return posted_at, updated_at
+
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
         self.scraper_input = scraper_input
         job_list = []
@@ -118,8 +137,10 @@ class Dice(Scraper):
                 params["filters.postedDate"] = "THIRTY"
         if self.scraper_input.is_remote:
             params["filters.isRemote"] = "true"
-        if getattr(self.scraper_input, "easy_apply", False):
-            params["filters.easyApply"] = "true"
+        if getattr(self.scraper_input, "job_type", None):
+            from jobspy_enhanced.model import JobType
+            if self.scraper_input.job_type == JobType.FULL_TIME:
+                params["filters.employmentType"] = "FULLTIME"
         if self.scraper_input.location:
             params["location"] = self.scraper_input.location
 
@@ -227,6 +248,8 @@ class Dice(Scraper):
         location = util.parse_location(location_raw) if isinstance(location_raw, str) else None
         description = util.clean_description(job_data.get('description', ''))
         date_posted = util.parse_posted_date(job_data.get('postedDate') or job_data.get('datePosted'))
+        posted_at_raw = job_data.get('postedDate') or job_data.get('datePosted')
+        posted_at, updated_at = self._extract_posted_and_updated(posted_at_raw, description)
         
         job_type = []
         jt = util.map_job_type(employment_type_raw or job_data.get('employmentType'))
@@ -250,7 +273,7 @@ class Dice(Scraper):
         job_post = JobPost(
             id=job_id, title=title, company_name=company, location=location, job_url=job_url,
             job_url_direct=external_url, description=description, date_posted=date_posted,
-            job_type=job_type, compensation=compensation
+            posted_at=posted_at, updated_at=updated_at, job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
         if employment_type_raw:
@@ -268,6 +291,9 @@ class Dice(Scraper):
         description = util.clean_description(job_data.get('description', ''))
         date_posted = job_data.get('datePosted', '').split('T')[0] if job_data.get('datePosted') else None
         
+        posted_at_raw = job_data.get('datePosted')
+        posted_at, updated_at = self._extract_posted_and_updated(posted_at_raw, description)
+
         job_type = []
         jt = util.map_job_type(employment_type_raw or job_data.get('employmentType'))
         if jt: job_type.append(jt)
@@ -286,7 +312,7 @@ class Dice(Scraper):
         job_post = JobPost(
             id=job_id, title=title, company_name=company, location=location, job_url=job_url,
             job_url_direct=external_url, description=description, date_posted=date_posted,
-            job_type=job_type, compensation=compensation
+            posted_at=posted_at, updated_at=updated_at, job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
         if employment_type_raw:
@@ -310,7 +336,11 @@ class Dice(Scraper):
         description = util.clean_description(str(desc_elem)) if desc_elem else ""
         
         date_elem = soup.find(attrs={'data-testid': 'job-header-posted-date'})
-        date_posted = util.parse_posted_date(date_elem.get_text(strip=True)) if date_elem else None
+        date_posted_str = date_elem.get_text(strip=True) if date_elem else None
+        date_posted = util.parse_posted_date(date_posted_str) if date_posted_str else None
+        
+        posted_at_raw = date_posted_str
+        posted_at, updated_at = self._extract_posted_and_updated(posted_at_raw, description)
         
         job_type = []
         jt = util.map_job_type(employment_type_raw)
@@ -332,7 +362,7 @@ class Dice(Scraper):
         job_post = JobPost(
             id=job_id, title=title, company_name=company, location=location, job_url=job_url,
             job_url_direct=external_url, description=description, date_posted=date_posted,
-            job_type=job_type, compensation=compensation
+            posted_at=posted_at, updated_at=updated_at, job_type=job_type, compensation=compensation
         )
         object.__setattr__(job_post, 'employment_type', employment_type_raw)
         if employment_type_raw:

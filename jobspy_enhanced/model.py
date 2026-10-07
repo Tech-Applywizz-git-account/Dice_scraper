@@ -251,6 +251,8 @@ class JobPost(BaseModel):
     job_type: list[JobType] | None = None
     compensation: Compensation | None = None
     date_posted: date | None = None
+    posted_at: str | None = None
+    updated_at: str | None = None
     emails: list[str] | None = None
     is_remote: bool | None = None
     listing_type: str | None = None
