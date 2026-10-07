@@ -28,6 +28,20 @@ def init_db():
                 conn.commit()
             else:
                 print("Unique constraint dice_scraped_jobs_url_applywizz_unique already exists.")
+                
+            # Add columns if they do not exist
+            cur.execute("""
+                ALTER TABLE public.dice_scraped_jobs 
+                ADD COLUMN IF NOT EXISTS description text,
+                ADD COLUMN IF NOT EXISTS location text,
+                ADD COLUMN IF NOT EXISTS job_type text,
+                ADD COLUMN IF NOT EXISTS scraped_experience text,
+                ADD COLUMN IF NOT EXISTS search_keyword text,
+                ADD COLUMN IF NOT EXISTS search_location text,
+                ADD COLUMN IF NOT EXISTS posted_at text,
+                ADD COLUMN IF NOT EXISTS updated_at text;
+            """)
+            conn.commit()
     finally:
         conn.close()
 
@@ -47,14 +61,16 @@ def upsert_jobs(jobs_data):
     try:
         with conn.cursor() as cur:
             query = """
-                INSERT INTO public.dice_scraped_jobs (url, title, company, applywizz_id, company_email)
+                INSERT INTO public.dice_scraped_jobs (url, title, company, applywizz_id, company_email, description, location, job_type, scraped_experience, search_keyword, search_location, posted_at, updated_at)
                 VALUES %s
                 ON CONFLICT (url, applywizz_id) DO NOTHING
                 RETURNING id;
             """
             
             values = [
-                (j['url'], j.get('title'), j.get('company'), j['applywizz_id'], j.get('company_email'))
+                (j['url'], j.get('title'), j.get('company'), j['applywizz_id'], j.get('company_email'),
+                 j.get('description'), j.get('location'), j.get('job_type'),
+                 j.get('scraped_experience'), j.get('search_keyword'), j.get('search_location'), j.get('posted_at'), j.get('updated_at'))
                 for j in jobs_data
             ]
             

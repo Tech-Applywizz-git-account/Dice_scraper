@@ -4,7 +4,7 @@ import argparse
 import re
 from typing import Dict, List, Any
 import jobspy_enhanced.dice
-from jobspy_enhanced.model import ScraperInput, Site, Country, JobPost
+from jobspy_enhanced.model import ScraperInput, Site, Country, JobPost, JobType
 
 # In-memory cache for dice search queries
 # Key: (search_term, location, country) -> List[JobPost]
@@ -41,7 +41,8 @@ def get_jobs_from_dice(search_term: str, location: str, country_str: str) -> Lis
         country=country_enum,
         results_wanted=results_wanted,
         hours_old=hours,
-        easy_apply=True
+        easy_apply=True,
+        job_type=JobType.FULL_TIME
     )
 
     scraper = jobspy_enhanced.dice.Dice()
