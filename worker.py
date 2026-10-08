@@ -58,6 +58,7 @@ def process_client(applywizz_id, to_db: bool = True):
         print(f"Requirements loaded. Roles: {search_roles}, Locations count: {len(locations)}")
         
         all_jobs = []
+        job_trace_map = {}
         # Scrape Dice for each role and location combination
         print("Dice scraping started...")
         client_country = requirements.get("country") or "United States"
@@ -67,6 +68,10 @@ def process_client(applywizz_id, to_db: bool = True):
                 if not location: continue
                 # print(f"Scraping Dice for role: '{role}' in '{location}' for {applywizz_id}")
                 jobs = get_jobs_from_dice(role, location, client_country)
+                for j in jobs:
+                    j_url = getattr(j, 'job_url', None)
+                    if j_url and j_url not in job_trace_map:
+                        job_trace_map[j_url] = (role, location)
                 all_jobs.extend(jobs)
                 # Respect rate limits, small sleep
                 time.sleep(1)
@@ -117,10 +122,20 @@ def process_client(applywizz_id, to_db: bool = True):
                 
             search_keyword, search_location = job_trace_map.get(job.job_url, ("", ""))
             job_type_val = getattr(job, 'job_type', "")
-            if job_type_val and hasattr(job_type_val, 'value'):
-                job_type_val = job_type_val.value
-            elif job_type_val and isinstance(job_type_val, list):
-                job_type_val = ", ".join([v.value if hasattr(v, 'value') else str(v) for v in job_type_val])
+            if job_type_val and isinstance(job_type_val, list):
+                types_list = []
+                for v in job_type_val:
+                    if hasattr(v, 'value'):
+                        val = v.value
+                        types_list.append(val[0] if isinstance(val, (list, tuple)) and val else str(val))
+                    else:
+                        types_list.append(str(v))
+                job_type_val = ", ".join(types_list)
+            elif job_type_val and hasattr(job_type_val, 'value'):
+                val = job_type_val.value
+                job_type_val = val[0] if isinstance(val, (list, tuple)) and val else str(val)
+            else:
+                job_type_val = str(job_type_val or "")
                 
             record = {
                 'awl_id': applywizz_id,
